@@ -8,6 +8,7 @@ import theaterRoutes from './routes/theaterRoutes.js';
 import showRoutes from './routes/showRoutes.js';
 import bookingRoutes from './routes/bookingRoutes.js';
 import adminRoutes from './routes/adminRoutes.js';
+import { autoSeedShowsIfExpired } from './seed/showSeeddata.js';
 
 dotenv.config();
 
@@ -56,8 +57,9 @@ const PORT = process.env.PORT || 5000;
 
 mongoose
   .connect(process.env.MONGODB_URI)
-  .then(() => {
+  .then(async () => {
     console.log('MongoDB connected');
+    await autoSeedShowsIfExpired();
     app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
   })
   .catch((err) => {

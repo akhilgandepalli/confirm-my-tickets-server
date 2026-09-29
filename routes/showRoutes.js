@@ -3,11 +3,15 @@ import Show from '../models/Show.js';
 import Theater from '../models/Theater.js';
 import Movie from '../models/Movie.js';
 import { protect, admin } from '../middleware/auth.js';
+import { autoSeedShowsIfExpired } from '../seed/showSeeddata.js';
 
 const router = express.Router();
 
 router.get('/', async (req, res) => {
   try {
+    // Automatically reseed shows for 7 days if all show dates have passed
+    await autoSeedShowsIfExpired();
+
     const { movie, theater, city, date, search, sortBy, order, page, limit } = req.query;
     const filter = {};
 

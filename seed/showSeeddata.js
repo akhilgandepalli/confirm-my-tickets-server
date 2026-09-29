@@ -17,10 +17,19 @@ const generateRowNames = (rowCount) => {
   return Array.from({ length: rowCount }, (_, i) => String.fromCharCode(65 + i));
 };
 
-const seedShows = async () => {
+let isSeedingInProgress = false;
+
+/**
+ * Generates and seeds shows for 7 consecutive days starting from today.
+ */
+export const seedShows = async () => {
+  if (isSeedingInProgress) {
+    console.log('[ShowSeed] Seeding already in progress, skipping duplicate call.');
+    return;
+  }
+
   try {
-    await mongoose.connect(process.env.MONGODB_URI);
-    console.log('Connected to MongoDB');
+    isSeedingInProgress = true;
 
     // Fetch existing movies and theaters from DB
     const [movies, theaters] = await Promise.all([
@@ -29,20 +38,18 @@ const seedShows = async () => {
     ]);
 
     if (movies.length === 0) {
-      console.error('No now_showing movies found! Please run "npm run seed" first.');
-      process.exit(1);
+      console.log('[ShowSeed] No now_showing movies found to seed shows.');
+      return;
     }
 
     if (theaters.length === 0) {
-      console.error('No theaters found! Please run "npm run seed" first.');
-      process.exit(1);
+      console.log('[ShowSeed] No theaters found to seed shows.');
+      return;
     }
 
-    console.log(`Found ${movies.length} active movies and ${theaters.length} theaters.`);
-
-    // Clear existing shows before seeding new 7-day schedule
+    // Clear previous shows
     await Show.deleteMany({});
-    console.log('Cleared previous shows.');
+    console.log('[ShowSeed] Cleared previous shows.');
 
     const showsToInsert = [];
 
@@ -51,13 +58,12 @@ const seedShows = async () => {
     baseDate.setHours(0, 0, 0, 0);
 
     const dateOptions = { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' };
-    console.log(`Generating shows for 7 consecutive days starting from ${baseDate.toLocaleDateString('en-US', dateOptions)}...`);
+    console.log(`[ShowSeed] Generating shows for 7 consecutive days starting from ${baseDate.toLocaleDateString('en-US', dateOptions)}...`);
 
     for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
       const currentDate = new Date(baseDate);
       currentDate.setDate(baseDate.getDate() + dayOffset);
 
-      // Iterate through theaters and assign shows for movies
       theaters.forEach((theater, tIndex) => {
         const layout = theater.seatingLayout || {
           rows: 10,
@@ -68,16 +74,13 @@ const seedShows = async () => {
         const totalSeats = (layout.rows || 10) * (layout.cols || 10);
         const screenCount = theater.screens || 1;
 
-        // Determine which movies to play in this theater on this day
-        // Distribute movies across theaters and screens
         for (let s = 0; s < Math.min(screenCount, 3); s++) {
           const movie = movies[(tIndex + s + dayOffset) % movies.length];
           const screenName = `Screen ${s + 1}`;
 
-          // Pick 2-3 showtimes for this screen
           const selectedTimes = showTimes.slice(0, 3);
           selectedTimes.forEach((timeSlot, timeIdx) => {
-            const basePrice = 200 + ((tIndex + timeIdx) % 3) * 50; // e.g. 200, 250, 300
+            const basePrice = 200 + ((tIndex + timeIdx) % 3) * 50;
 
             showsToInsert.push({
               movie: movie._id,
@@ -101,23 +104,52 @@ const seedShows = async () => {
       });
     }
 
-    console.log(`Inserting ${showsToInsert.length} shows into the database...`);
     await Show.insertMany(showsToInsert);
 
     const endDate = new Date(baseDate);
     endDate.setDate(baseDate.getDate() + 6);
 
-    console.log(' Shows successfully seeded!');
-    console.log(`- Total shows created: ${showsToInsert.length}`);
-    console.log(`- Date range: ${baseDate.toLocaleDateString('en-US', dateOptions)} to ${endDate.toLocaleDateString('en-US', dateOptions)} (7 consecutive days)`);
-    console.log(`- Theaters covered: ${theaters.length}`);
-    console.log(`- Movies featured: ${movies.length}`);
-
-    process.exit(0);
+    console.log(`[ShowSeed] Successfully seeded ${showsToInsert.length} shows for 7 consecutive days (${baseDate.toLocaleDateString('en-US', dateOptions)} to ${endDate.toLocaleDateString('en-US', dateOptions)}).`);
   } catch (error) {
-    console.error('Error seeding shows:', error);
-    process.exit(1);
+    console.error('[ShowSeed] Error seeding shows:', error);
+  } finally {
+    isSeedingInProgress = false;
   }
 };
 
-seedShows();
+/**
+ * Checks if all shows in DB are in the past (expired) or if no shows exist.
+ * If expired, automatically runs seedShows() to replenish shows for the next 7 days.
+ */
+export const autoSeedShowsIfExpired = async () => {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Count how many shows exist with date >= today
+    const upcomingShowsCount = await Show.countDocuments({ date: { $gte: today } });
+
+    if (upcomingShowsCount === 0) {
+      console.log(`[AutoSeed] All show dates have passed or no shows found. Auto-seeding 7 days of shows starting from today (${today.toLocaleDateString()})...`);
+      await seedShows();
+    }
+  } catch (error) {
+    console.error('[AutoSeed] Error checking show expiration:', error);
+  }
+};
+
+// If run directly via CLI (e.g. npm run seed:shows or node seed/showSeeddata.js)
+const isDirectRun = process.argv[1] && process.argv[1].endsWith('showSeeddata.js');
+if (isDirectRun) {
+  mongoose
+    .connect(process.env.MONGODB_URI)
+    .then(async () => {
+      console.log('Connected to MongoDB');
+      await seedShows();
+      process.exit(0);
+    })
+    .catch((err) => {
+      console.error('CLI Seed Error:', err);
+      process.exit(1);
+    });
+}
